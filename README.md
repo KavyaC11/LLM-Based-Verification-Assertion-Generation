@@ -1,47 +1,46 @@
-# LLM-Based Verification Assertion Generation
+# LLM-Based RTL Assertion Generation
 
-Automatic generation of SystemVerilog Assertions (SVA) from RTL sources and natural-language hardware specifications. The pipeline addresses long-context limits, agentic memory, multi-agent coordination, prompt caching, and feedback-driven refinement.
+Automatic generation of SystemVerilog Assertions (SVA) from RTL sources and natural-language hardware specifications. The system manages long context, persistent memory across runs, multi-agent coordination, prompt caching, and iterative refinement of LLM outputs.
 
-**Phases:** 0–10 | **Core run:** Phases 0–7 | **Advanced:** Phases 8–10
+**Phases 0–10** · Core path: **0–7** · Advanced modules: **8–10**
 
-## Problem
+## Overview
 
-Given RTL and a specification, produce correct SVA properties without sending entire designs to an LLM. Specs and RTL are large; signal names rarely match; generation often needs iteration and memory across runs.
+Given a design’s RTL and its specification, the pipeline extracts behavioral rules, maps them to real signals, assembles a minimal relevant context, and generates validated SVA properties. Outputs and caches are written under `results/` and `cache/`.
 
 ## Pipeline
 
-| Phase | Name | Role |
-|-------|------|------|
-| 0 | Session & cache | Design hashing; L1/L2/L3 reuse of RTL IR, context, assertions |
-| 1 | Spec processing | PDF/text → Spec IR (rules) via TF-IDF ranking + LLM extraction |
-| 2 | RTL processing | Verilog/SV/VHDL → RTL IR (ports, clocks/resets, FSMs, dep-graph) |
-| 3 | Grounding | Spec ↔ RTL signal mapping (exact / fuzzy / graph / memory) |
-| 4 | Context | Budget-aware priority slicing of relevant RTL for each rule |
-| 5 | Sufficiency | Structural + semantic checks; targeted clarifications |
-| 6 | Generation | LLM SVA generation; Tier-1 syntax + Tier-2 semantic checks |
-| 7 | Memory | Grounding updates, CogniGraph, staleness / Weibull decay |
-| 8 | Multi-agent | Specialist agents (horizontal/vertical); used on escalation |
-| 9 | Relay cache | Multi-granularity prompt cache (implemented; not on default path) |
-| 10 | Self-refine | iGRPO-style drafts + SELF-REFINE loop; can escalate to Phase 8 |
+| Phase | Implementation |
+|-------|----------------|
+| **0 — Session & cache** | Hashes RTL + spec content; reuses L1 RTL IR, L2 context packages, and L3 validated assertions when the design is unchanged. |
+| **1 — Spec processing** | Extracts text (PDF/TXT), strips boilerplate, ranks chunks with TF-IDF + hardware keywords, then uses the LLM to emit structured rules (trigger, obligation, timing). |
+| **2 — RTL processing** | Regex-parses Verilog/SystemVerilog/VHDL into a unified IR: ports, internals, clocks/resets, FSMs, and a signal dependency graph. |
+| **3 — Grounding** | Aligns spec names to RTL signals via exact match, fuzzy matching, dependency-graph bonuses, and historical grounding memory with staleness filtering. |
+| **4 — Context** | Builds a per-rule package with a budget-aware priority slicer (`confidence × 1/(hop+1)`), always including clocks/resets within a token budget. |
+| **5 — Sufficiency** | Scores structural and semantic completeness; emits targeted clarification requests and can iterate before escalating for review. |
+| **6 — Generation** | Prompts the LLM for SVA, then applies Tier-1 syntax checks and Tier-2 signal-validity checks with limited retries. |
+| **7 — Memory** | Updates grounding confidence, assertion store, and CogniGraph; applies Weibull decay and prunes stale mappings for later runs. |
+| **8 — Multi-agent** | Runs specialist roles (trigger, obligation, timing, synthesizer, reviewer) with redundancy/synergy controls; selectable horizontal or vertical flow. |
+| **9 — Relay cache** | Multi-granularity prompt/chunk/reasoning reuse with similarity gating and validation before serving cached results. |
+| **10 — Self-refine** | Samples multiple drafts, scores them, and refines with multi-aspect feedback; may escalate to multi-agent when single-shot refinement is insufficient. |
 
-**Entry points**
-
-- `main.py` — Phases 0–7 (baseline end-to-end)
-- `feed.py` — Phases 0–5 + Phase 10 (self-refine) + formal eval via `eval.py`
+**Entry points:** `main.py` runs phases 0–7 end-to-end. `feed.py` uses self-refinement (phase 10) and optional formal evaluation via `eval.py`.
 
 ## Setup
 
-**Requirements:** Python 3.11+, [Ollama](https://ollama.com/) with a pulled model (default: `llama3.1:latest` in `config.py`). Optional: Graphviz (`dot`), SymbiYosys (`sby`) for `feed.py` formal checks.
+- Python 3.11+
+- Local LLM via [Ollama](https://ollama.com/) (model set in `config.py`, default `llama3.1:latest`)
+- Optional: Graphviz (`dot`) for dependency-graph images; SymbiYosys (`sby`) for formal checks in `feed.py`
 
 ```bash
 python -m venv venv
-# Windows: venv\Scripts\activate
-# Unix:    source venv/bin/activate
+# Windows:  venv\Scripts\activate
+# Unix:     source venv/bin/activate
 pip install -r requirements.txt
 ollama pull llama3.1:latest
 ```
 
-Model and thresholds live in `config.py`. Override host with `OLLAMA_HOST` if needed.
+Thresholds, model name, and design paths are configured in `config.py`. The Ollama host defaults to `http://localhost:11434` (`OLLAMA_HOST`).
 
 ## Usage
 
@@ -50,24 +49,26 @@ python main.py <design_name> [max_rules]
 python feed.py <design_name> [max_rules]
 ```
 
+Examples:
+
 ```bash
 python main.py spi_master 5
 python feed.py ethmac 10
 ```
 
-Registered designs (`config.py`): `ethmac`, `ethernet`, `i2c`, `spi_master`, `sockit`, `openMSP430`, `crypto_bridge`.
+Designs registered in `config.py`: `ethmac`, `ethernet`, `i2c`, `spi_master`, `sockit`, `openMSP430`, `crypto_bridge`.
 
-Artifacts: `results/<design>/…` | Caches: `cache/` (both gitignored)
-
-## Repository layout
+## Layout
 
 ```
-config.py, main.py, feed.py, eval.py
-phase0_session.py … phase10_self_refine.py
-designs/    # RTL
-specs/      # PDF / TXT specifications
+config.py                 Model, thresholds, design registry
+main.py                   Baseline orchestrator (phases 0–7)
+feed.py                   Self-refine orchestrator + formal hook
+eval.py                   Isolated SymbiYosys evaluation
+phase0_session.py …       Session / cache through self-refine
+phase10_self_refine.py
+designs/                  RTL sources
+specs/                    Specification PDFs / text
 ```
 
-## Design note
-
-The accompanying system design document describes Groq (`llama-3.3-70b-versatile`) as the LLM backend; this codebase uses **Ollama** locally. Phases 8 and 10 are wired through `feed.py`; Phase 9 is present for integration but not invoked by the default orchestrators.
+`venv/`, `cache/`, and `results/` are gitignored. To add a design, place RTL under `designs/`, a spec under `specs/`, and register it in `DESIGNS`.
