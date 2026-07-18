@@ -1,0 +1,5 @@
+ollama
+colorama
+rapidfuzz
+pdfplumber
+scikit-learn

@@ -1,0 +1,91 @@
+======================================================================
+Crypto DMA Bridge Component Datasheet
+Version 1.0
+Copyright (c) 2026
+======================================================================
+
+Table of Contents
+1. Introduction
+2. Terminology and Abbreviations
+3. Port Descriptions
+4. Register Map
+5. Functional Description
+6. Revision History
+
+======================================================================
+1. Introduction
+======================================================================
+The Crypto DMA Bridge is a hardware component designed to fetch data from system memory, encrypt it using a stubbed stream cipher, and output it via a synchronous stream interface. 
+
+======================================================================
+3. Port Descriptions
+======================================================================
+The module interfaces with the system via the following ports.
+
+Signal Name      Width   Direction   Description
+clk              1       input       System clock
+rst_n            1       input       Active-low asynchronous reset
+cfg_wen          1       input       Configuration write enable
+cfg_addr         8       input       Configuration address bus
+cfg_wdata        32      input       Configuration write data
+cfg_rdata        32      output      Configuration read data
+dma_req          1       output      DMA transfer request
+dma_ack          1       input       DMA transfer acknowledge
+dma_addr         32      output      DMA target address
+dma_len          16      output      DMA transfer length
+stream_valid     1       output      Stream output valid
+stream_data      32      output      Stream output data
+stream_ready     1       input       Stream downstream ready
+irq              1       output      Interrupt request
+err_flag         1       output      Hardware error flag
+
+======================================================================
+4. Register Map
+======================================================================
+0x00 : CTRL_REG   (Control Register)
+0x04 : STAT_REG   (Status Register)
+0x08 : ADDR_REG   (Source Address Register)
+0x0C : LEN_REG    (Transfer Length Register)
+
+======================================================================
+5. Functional Description
+======================================================================
+This section details the behavioral obligations of the Crypto DMA Bridge.
+
+5.1 Reset Behavior
+Upon reset, the module must return to a safe state.
+On reset, the dma_req signal shall be driven low.
+On reset, the stream_valid signal must be cleared to zero.
+On reset, the irq signal must be deasserted.
+On reset, the err_flag signal is set to low.
+On reset, the cfg_rdata bus shall output 32'h00000000.
+On reset, the internal FSM must enter the IDLE state.
+
+5.2 Configuration Interface
+The configuration interface operates synchronously with clk.
+When cfg_wen is high, the internal registers shall be updated with cfg_wdata on the next posedge of clk.
+If cfg_wen is high and cfg_addr is 0x08, the ADDR_REG must be updated.
+If cfg_wen is high and cfg_addr is 0x0C, the LEN_REG must be updated.
+The cfg_rdata must constantly output the value of the register selected by cfg_addr.
+If an invalid cfg_addr (greater than 0x0C) is read, cfg_rdata shall output 32'hFFFFFFFF.
+
+5.3 DMA Handshake and Transfer
+To initiate a transfer, the CTRL_REG bit 0 (start bit) must be written high.
+When the FSM enters the REQUEST state, the dma_req signal shall be asserted high.
+The dma_addr output must always perfectly match the internal ADDR_REG value.
+The dma_len output must always perfectly match the internal LEN_REG value.
+When dma_req is high and dma_ack goes high, the dma_req signal must be deasserted on the next cycle.
+If dma_ack is high while dma_req is low, the err_flag signal must be asserted high within 1 cycle.
+
+5.4 Stream Interface
+The output stream uses a standard valid/ready handshake.
+When the FSM is in the ACTIVE state, the stream_valid signal must be high.
+Data transfer occurs when both stream_valid and stream_ready are high simultaneously.
+If stream_valid is high and stream_ready is low, the stream_data value must remain stable.
+The stream_data output is continuously assigned to the internal cipher_data register.
+
+5.5 Interrupts and Errors
+When the transfer completes and the FSM returns to IDLE, the irq signal shall be asserted high.
+The irq signal must remain high until CTRL_REG bit 1 (clear interrupt) is written high.
+If an invalid cfg_addr is written to while cfg_wen is active, err_flag must be set high on the next cycle.
+If err_flag is asserted, the irq signal shall also be asserted immediately.

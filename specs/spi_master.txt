@@ -1,0 +1,124 @@
+SPI Master Controller — Hardware Specification
+===============================================
+Module: spi_master
+Version: 1.0
+
+1. Overview
+-----------
+The spi_master module implements a simple SPI master controller supporting
+8-bit serial transfers. It provides a CPU register interface for configuration
+and data transfer, and a standard 4-wire SPI interface to slave devices.
+
+The controller supports configurable clock polarity (CPOL) and clock phase
+(CPHA), a programmable clock divider, and an optional interrupt on transfer
+completion.
+
+2. Ports
+--------
+Signal      Width   Direction   Description
+clk         1       input       System clock
+rst_n       1       input       Active-low asynchronous reset
+bus_wen     1       input       CPU write enable (active high, single cycle)
+bus_ren     1       input       CPU read enable (active high, single cycle)
+bus_adr     2       input       Register address (see address map)
+bus_wdt     8       input       CPU write data
+bus_rdt     8       output      CPU read data
+bus_irq     1       output      Interrupt request (active high)
+spi_sclk    1       output      SPI clock output
+spi_mosi    1       output      SPI master data output
+spi_miso    1       input       SPI master data input
+spi_cs_n    1       output      SPI chip select (active low)
+
+3. Register Map
+---------------
+Address     Name        Access      Description
+0x0         csr         R/W         Control and status register
+0x1         tx_data     W           Transmit data register
+0x2         rx_data     R           Receive data register (read only)
+0x3         clk_div     R/W         Clock divider register
+
+3.1 Control/Status Register (csr) — Address 0x0
+------------------------------------------------
+Bit     Name    Access  Reset   Description
+0       go      R/W     0       Write 1 to start a transfer.
+                                Reads 1 while a transfer is in progress.
+                                Cleared automatically when transfer completes.
+1       ien     R/W     0       Interrupt enable. When set, bus_irq is asserted
+                                when the irq flag is set.
+2       cpol    R/W     0       Clock polarity. 0 = spi_sclk idle low,
+                                1 = spi_sclk idle high.
+3       cpha    R/W     0       Clock phase. Controls sample/drive edge.
+7       irq     R/C     0       Interrupt flag. Set when a transfer completes.
+                                Cleared when the csr register is read.
+
+4. Functional Description
+--------------------------
+
+4.1 Reset Behaviour
+-------------------
+When rst_n is asserted low, all internal registers and outputs are reset to
+their default values immediately. spi_cs_n is deasserted (driven high),
+spi_sclk is driven to the idle level (cpol = 0 so idle low), spi_mosi is
+driven low, and bus_irq is deasserted. The go bit and irq bit in csr are
+both cleared. The clk_div register resets to 0x04.
+
+4.2 Starting a Transfer
+-----------------------
+A transfer is initiated by writing 1 to the go bit in the csr register.
+On the same clock edge that go is written, the controller loads tx_data
+into the internal shift register and asserts spi_cs_n low. The state machine
+transitions from IDLE to ACTIVE on the next clock cycle after go is set.
+Writing to go while a transfer is already in progress (go reads 1) will
+restart the transfer from bit 7, which may corrupt the current transaction
+and should be avoided.
+
+4.3 Clock Generation
+--------------------
+The SPI clock (spi_sclk) is derived from the system clock using the clk_div
+register. The SPI clock half-period is clk_div system clock cycles. The
+clk_div register must not be written while a transfer is in progress (go = 1).
+The minimum legal value for clk_div is 1. Writing 0 to clk_div has undefined
+behaviour.
+
+4.4 Data Transfer
+-----------------
+Data is transferred MSB first. During ACTIVE state, spi_mosi is driven with
+the current MSB of the shift register on each falling edge of spi_sclk.
+spi_miso is sampled on each rising edge of spi_sclk and shifted into the
+LSB of the shift register. After all 8 bits have been transferred the
+controller transitions to the DONE state.
+
+4.5 Transfer Completion
+-----------------------
+When the transfer completes, the controller enters DONE state for one clock
+cycle. In DONE state: spi_cs_n is deasserted (driven high), the received
+byte is latched into rx_data, the go bit in csr is cleared to 0, and the
+irq flag (csr bit 7) is set to 1. The controller then returns to IDLE state.
+
+If ien is set, bus_irq will be asserted high on the clock cycle after irq
+is set. bus_irq remains asserted until irq is cleared.
+
+4.6 Interrupt Handling
+----------------------
+The irq flag is set on transfer completion and is cleared by reading the
+csr register. Reading csr while irq is set causes irq to be cleared on
+that same clock edge — the cleared value is not visible in the read data
+(the read returns the value including the set irq bit). bus_irq is driven
+combinatorially from irq AND ien, so bus_irq deasserts on the same cycle
+that irq is cleared.
+
+4.7 Chip Select
+---------------
+spi_cs_n is asserted low when go is set and the state machine leaves IDLE.
+spi_cs_n remains low for the entire duration of the transfer (ACTIVE state).
+spi_cs_n is deasserted high in DONE state and remains high in IDLE state.
+
+5. Timing
+---------
+All CPU bus signals (bus_wen, bus_ren, bus_wdt, bus_adr) must be stable for
+one full clock cycle. Read data (bus_rdt) is valid on the clock cycle
+following bus_ren being asserted. Both read and write cycles are exactly
+one clock cycle long.
+
+A complete 8-bit SPI transfer takes exactly 16 * clk_div system clock
+cycles in ACTIVE state, plus one cycle in DONE state.
